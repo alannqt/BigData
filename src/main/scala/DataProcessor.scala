@@ -1,15 +1,13 @@
-//package ca
 
 import java.text.ParseException
 
-import org.apache.spark
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.sql.types.{StringType, StructField, StructType}
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 
-import scala.util.{Failure, Try}
+import scala.collection.mutable.ListBuffer
+import scala.util.Try
 
 object DataProcessor {
 
@@ -18,7 +16,8 @@ object DataProcessor {
     val sc = new SparkContext(conf)
     //readRaw(conf)
     //readRaw(sc, conf)
-    readRawToDf(sc, conf)
+    val df = readRawToDf(sc, conf)
+    getColumnSignals(df)
   }
 
   //  def readRaw(conf: SparkConf): Unit = {
@@ -60,7 +59,7 @@ object DataProcessor {
   //  }
 
   //source: https://stackoverflow.com/questions/51962274/spark-add-column-to-dataframe-when-reading-csv
-  def readRawToDf(ctx: SparkContext, conf: SparkConf) {
+  def readRawToDf(ctx: SparkContext, conf: SparkConf): DataFrame = {
 
     //read the data as rdd and split the lines
     val file: RDD[Array[String]] = ctx.textFile("hdfs://localhost:8020/user/cloudera/ca/data/sensor/20-04-08/*").map(_.split(",", -1))
@@ -79,6 +78,7 @@ object DataProcessor {
     ), schema)
 
     rawDf.show(false)
+    return rawDf
   }
 
   def isDate(dateStr: String): Boolean = {
@@ -96,8 +96,43 @@ object DataProcessor {
     }
   }
 
+  def isInteger(input: String): Boolean = try {
+    input.toInt
+    true
+  } catch {
+    case e: Exception =>
+      false
+  }
+
+  def getColumnSignals(df: DataFrame): Unit = {
+    val cols = df.columns.toSeq
+    val signalList = new ListBuffer[String]()
+    val importantSignals = List(0,1)
+    cols.foreach(c => {
+      val colVals = df.select(c).rdd.map(r => r(0).asInstanceOf[String]).collect.toList//df.select(c).collect().map(r => r.getString(0)).toList.forall(x => isInteger(x)) //df.select(c).rdd.map(r => r(0)).collect.toList
+      val areIntegerCol = colVals.forall(x => isInteger(x))
+      if(areIntegerCol) {
+        val distinctColVals = colVals.map(v => v.toInt).distinct//df.withColumn(c, df.col(c).cast(IntegerType)).select(c).distinct()//df.agg(countDistinct(c))
+        val distinctColValsCount = distinctColVals.length//df.agg(countDistinct(c))
+        if (distinctColValsCount > 4 && distinctColValsCount > 1 && importantSignals.exists(i => distinctColVals.contains(i))) {
+          signalList+=c
+        }
+      }
+
+    })
+
+    println("total binary signal obtained: " + signalList.toList.size)
+  }
+
   def printUtf8(str: String) {
     val result = new String(str.getBytes(), "UTF-8")
     println(result)
   }
+
+//  def writeListToFile(list: List, fileName: String): Unit = {
+//    import java.nio.file.Files;
+//    import java.nio.file.Paths
+//    val content = list.mkString("\n").getBytes
+//    Files.write(Paths.get(fileName), content)
+//  }
 }
